@@ -136,7 +136,9 @@ func (this *proxyNode) Compare(x *proxyNode, method string) bool {
 	case "failcnt":
 		return atomic.LoadInt64(&x.failcnt) > atomic.LoadInt64(&this.failcnt)
 	case "timeout":
-		return atomic.LoadInt64(&x.timeout) > atomic.LoadInt64(&this.timeout)
+		t0 := atomic.LoadInt64(&this.timeout)
+		t1 := atomic.LoadInt64(&x.timeout)
+		return 0 < t0 && (0 == t1 || t1 > t0)
 	case "usability":
 		return atomic.LoadInt64(&x.usability) < atomic.LoadInt64(&this.usability)
 	case "last":
