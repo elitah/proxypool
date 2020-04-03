@@ -9,6 +9,23 @@ import (
 	"time"
 )
 
+type Map interface {
+	Delete(interface{})
+	Load(interface{}) (interface{}, bool)
+	LoadOrStore(interface{}, interface{}) (interface{}, bool)
+	Range(func(interface{}, interface{}) bool)
+	Store(interface{}, interface{})
+}
+
+type ProxyManager interface {
+	Map
+	sort.Interface
+
+	IsExist(interface{}) bool
+	CloseBad(int64)
+	GetSortList() []*proxyNode
+}
+
 type proxyChecker interface {
 	IsExit() bool
 
@@ -35,6 +52,8 @@ func (this *proxyConn) Close() error {
 type proxyNode struct {
 	flags uint32
 
+	exit uint32
+
 	total   int64
 	okcnt   int64
 	failcnt int64
@@ -50,6 +69,10 @@ type proxyNode struct {
 	fn func(string, string) (net.Conn, error)
 }
 
+func (this *proxyNode) Close() {
+	atomic.CompareAndSwapUint32(&this.exit, 0x0, 0x1)
+}
+
 func (this *proxyNode) StartCheck(checker proxyChecker) {
 	if atomic.CompareAndSwapUint32(&this.flags, 0x0, 0x1) {
 		go func() {
@@ -59,7 +82,7 @@ func (this *proxyNode) StartCheck(checker proxyChecker) {
 
 			defer atomic.StoreUint32(&this.flags, 0x0)
 
-			for !checker.IsExit() {
+			for !checker.IsExit() && 0x0 == atomic.LoadUint32(&this.exit) {
 				//
 				now = time.Now()
 				//
@@ -102,6 +125,46 @@ func (this *proxyNode) StartCheck(checker proxyChecker) {
 			}
 		}()
 	}
+}
+
+func (this *proxyNode) Compare(x *proxyNode, method string) bool {
+	switch method {
+	case "total":
+		return atomic.LoadInt64(&x.total) < atomic.LoadInt64(&this.total)
+	case "okcnt":
+		return atomic.LoadInt64(&x.okcnt) < atomic.LoadInt64(&this.okcnt)
+	case "failcnt":
+		return atomic.LoadInt64(&x.failcnt) > atomic.LoadInt64(&this.failcnt)
+	case "timeout":
+		return atomic.LoadInt64(&x.timeout) > atomic.LoadInt64(&this.timeout)
+	case "usability":
+		return atomic.LoadInt64(&x.usability) < atomic.LoadInt64(&this.usability)
+	case "last":
+		return atomic.LoadInt64(&x.last) < atomic.LoadInt64(&this.last)
+	case "count":
+		return atomic.LoadInt64(&x.count) > atomic.LoadInt64(&this.count)
+	}
+	return false
+}
+
+func (this *proxyNode) Get(method string) int64 {
+	switch method {
+	case "total":
+		return atomic.LoadInt64(&this.total)
+	case "okcnt":
+		return atomic.LoadInt64(&this.okcnt)
+	case "failcnt":
+		return atomic.LoadInt64(&this.failcnt)
+	case "timeout":
+		return atomic.LoadInt64(&this.timeout)
+	case "usability":
+		return atomic.LoadInt64(&this.usability)
+	case "last":
+		return atomic.LoadInt64(&this.last)
+	case "count":
+		return atomic.LoadInt64(&this.count)
+	}
+	return 0
 }
 
 func (this *proxyNode) Dial(network string, address string) (net.Conn, error) {
@@ -173,6 +236,30 @@ func (this *proxyManager) Delete(key interface{}) {
 	this.Map.Delete(key)
 }
 
+func (this *proxyManager) IsExist(key interface{}) bool {
+	//
+	_, ok := this.Load(key)
+	//
+	return ok
+}
+
+func (this *proxyManager) CloseBad(t int64) {
+	if 3 > t {
+		t = 3
+	}
+	this.Range(func(key, value interface{}) bool {
+		if node, ok := value.(*proxyNode); ok {
+			if t < atomic.LoadInt64(&node.failcnt) {
+				// 关闭
+				node.Close()
+				// 删除
+				this.Delete(key)
+			}
+		}
+		return true
+	})
+}
+
 func (this *proxyManager) GetSortList() []*proxyNode {
 	if atomic.CompareAndSwapUint32(&this.flags, 0x0, 0x1) {
 		defer func() {
@@ -210,7 +297,7 @@ func (this *proxyManager) Less(i, j int) bool {
 	return this.lists[i].before(this.lists[j])
 }
 
-func NewProxyManager() *proxyManager {
+func NewProxyManager() ProxyManager {
 	return &proxyManager{}
 }
 

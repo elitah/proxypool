@@ -110,12 +110,14 @@ func main() {
 	fmt.Println("hello")
 
 	for _, item := range list {
-		if node := pool.NewProxyNode(
-			socks.Dial(fmt.Sprintf("socks4://%s?timeout=3s", item)),
-		); nil != node {
-			node.StartCheck(cc)
+		if !pm.IsExist(item) {
+			if node := pool.NewProxyNode(
+				socks.Dial(fmt.Sprintf("socks4://%s?timeout=3s", item)),
+			); nil != node {
+				node.StartCheck(cc)
 
-			pm.Store(item, node)
+				pm.Store(item, node)
+			}
 		}
 	}
 
